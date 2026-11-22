@@ -1,0 +1,35 @@
+# Optional local S3 emulation with MinIO (not verified in CI: requires a Docker daemon).
+# Usage:
+#   docker compose up -d minio minio-init
+#   in .env: LAKEHOUSE_STORAGE=s3 and S3_ENDPOINT_URL=http://localhost:9000
+#   make pipeline
+services:
+  minio:
+    image: quay.io/minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+
+  minio-init:
+    image: quay.io/minio/mc:latest
+    depends_on:
+      - minio
+    environment:
+      MC_USER: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      MC_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-lakehouse}
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set local http://minio:9000 $$MC_USER $$MC_PASSWORD; do sleep 2; done &&
+      mc mb --ignore-existing local/$$S3_BUCKET &&
+      echo bucket ready: $$S3_BUCKET
+      "
+
+volumes:
+  minio-data:

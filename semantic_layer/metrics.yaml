@@ -1,0 +1,306 @@
+# Capa semántica gobernada: única fuente de verdad para el analista SQL.
+# Solo las tablas listadas en `authorized_tables` pueden consultarse.
+# Bronze, Silver y cuarentena están explícitamente excluidas y el validador las bloquea.
+version: 1
+domain: ecommerce_indumentaria_ar
+currency: ARS
+description: >
+  Marts Gold de un e-commerce de indumentaria. Montos en pesos argentinos (ARS).
+  Los pedidos se atribuyen a su fecha de pedido (cohorte). Solo cuentan para ingresos
+  los pedidos en estado paid, shipped o delivered.
+
+restricted_layers:
+  - bronze
+  - silver
+  - quarantine
+
+authorized_tables:
+  - name: mart_daily_unit_economics
+    layer: gold
+    description: >
+      Economía unitaria diaria por canal. Muestra venta bruta, descuentos, devoluciones,
+      comisiones de pasarela, costo de envío, costo de mercadería y margen neto real.
+    grain: order_date x channel
+    columns:
+      - name: order_date
+        type: DATE
+        role: dimension
+        description: Fecha del pedido (cohorte).
+        synonyms: [fecha, dia, por dia, diaria, diario]
+      - name: channel
+        type: VARCHAR
+        role: dimension
+        description: Canal de venta (web, app, marketplace).
+        synonyms: [canal, canales, por canal]
+      - name: orders_count
+        type: INTEGER
+        role: measure
+        description: Cantidad de pedidos con estado de venta.
+        synonyms: [cantidad de pedidos, pedidos]
+      - name: units_sold
+        type: INTEGER
+        role: measure
+        description: Unidades vendidas en pedidos con estado de venta.
+        synonyms: [unidades, unidades vendidas]
+      - name: gross_sales
+        type: DECIMAL(18,2)
+        role: measure
+        description: Venta bruta a precio de lista de línea (cantidad x precio unitario), en ARS.
+        synonyms: [venta bruta, ventas brutas, bruto]
+      - name: discounts_amount
+        type: DECIMAL(18,2)
+        role: measure
+        description: Descuentos de ítem más descuentos de pedido, en ARS.
+        synonyms: [descuentos, descuento]
+      - name: net_sales
+        type: DECIMAL(18,2)
+        role: measure
+        description: Venta bruta menos descuentos, en ARS.
+        synonyms: [venta neta, ventas netas]
+      - name: refunds_amount
+        type: DECIMAL(18,2)
+        role: measure
+        description: Reembolsos por devoluciones de pedidos de la cohorte, en ARS.
+        synonyms: [devoluciones, reembolsos]
+      - name: net_revenue
+        type: DECIMAL(18,2)
+        role: measure
+        description: Venta neta menos reembolsos, en ARS.
+        synonyms: [ingreso neto, ingresos netos]
+      - name: gateway_fees_amount
+        type: DECIMAL(18,2)
+        role: measure
+        description: Comisiones de pasarela sobre pagos aprobados o reembolsados, en ARS.
+        synonyms: [comisiones, comision de pasarela, comisiones de pasarela]
+      - name: shipping_cost_amount
+        type: DECIMAL(18,2)
+        role: measure
+        description: Costo de envío absorbido por la empresa, en ARS.
+        synonyms: [costo de envio, envios]
+      - name: cogs_amount
+        type: DECIMAL(18,2)
+        role: measure
+        description: Costo de mercadería vendida neto de unidades devueltas y reingresadas, en ARS.
+        synonyms: [costo de mercaderia, cmv, costo de ventas]
+      - name: net_margin_amount
+        type: DECIMAL(18,2)
+        role: measure
+        description: Margen neto real = ingreso neto - comisiones - envío - costo de mercadería neto.
+        synonyms: [margen neto, margen, utilidad, rentabilidad]
+      - name: net_margin_pct
+        type: DECIMAL(9,4)
+        role: measure
+        description: Margen neto sobre ingreso neto. Calcular con las sumas, no promediando filas.
+        synonyms: [margen porcentual, tasa de margen]
+
+  - name: mart_checkout_funnel
+    layer: gold
+    description: >
+      Embudo de checkout por sesión. Etapas secuenciales: carrito creado, checkout iniciado,
+      pago aprobado. Una sesión solo cuenta en una etapa si alcanzó todas las anteriores.
+    grain: session_date x channel x payment_method
+    columns:
+      - name: session_date
+        type: DATE
+        role: dimension
+        description: Fecha de la primera actividad de la sesión.
+        synonyms: [fecha, dia, por dia, diaria]
+      - name: channel
+        type: VARCHAR
+        role: dimension
+        description: Canal de la sesión.
+        synonyms: [canal, canales, por canal]
+      - name: payment_method
+        type: VARCHAR
+        role: dimension
+        description: >
+          Medio de pago de la sesión (tarjeta_credito, tarjeta_debito, billetera_virtual,
+          transferencia). 'sin_seleccion' si nunca se eligió medio.
+        synonyms: [medio de pago, medios de pago, metodo de pago, por medio de pago]
+      - name: carts_created
+        type: INTEGER
+        role: measure
+        description: Sesiones con carrito creado.
+        synonyms: [carritos, carritos creados]
+      - name: checkouts_started
+        type: INTEGER
+        role: measure
+        description: Sesiones con checkout iniciado (que también crearon carrito).
+        synonyms: [checkouts, checkouts iniciados, inicios de checkout]
+      - name: payments_approved
+        type: INTEGER
+        role: measure
+        description: Sesiones con pago aprobado (que también iniciaron checkout).
+        synonyms: [pagos aprobados, pagos, compras]
+      - name: checkout_rate
+        type: DECIMAL(9,4)
+        role: measure
+        description: checkouts_started / carts_created. Calcular con sumas.
+        synonyms: [tasa de checkout]
+      - name: payment_rate_from_checkout
+        type: DECIMAL(9,4)
+        role: measure
+        description: payments_approved / checkouts_started. Calcular con sumas.
+        synonyms: [tasa de aprobacion, tasa de pago]
+      - name: conversion_rate
+        type: DECIMAL(9,4)
+        role: measure
+        description: payments_approved / carts_created. Calcular con sumas.
+        synonyms: [tasa de conversion, conversion]
+
+  - name: mart_sku_health
+    layer: gold
+    description: >
+      Salud por SKU: unidades, ingresos, devoluciones, cobertura de stock y alertas.
+      Los descuentos a nivel pedido no se asignan a SKU, por eso net_revenue solo descuenta
+      descuentos de ítem.
+    grain: sku
+    columns:
+      - name: sku
+        type: VARCHAR
+        role: dimension
+        description: Código de SKU (estilo-color-talle).
+        synonyms: [sku, skus, producto, productos]
+      - name: product_name
+        type: VARCHAR
+        role: dimension
+        description: Nombre comercial del producto.
+        synonyms: [nombre, producto]
+      - name: category
+        type: VARCHAR
+        role: dimension
+        description: Categoría (remera, pantalon, buzo, campera, vestido, short).
+        synonyms: [categoria, categorias, por categoria]
+      - name: size
+        type: VARCHAR
+        role: dimension
+        description: Talle (XS, S, M, L, XL).
+        synonyms: [talle, talles, por talle]
+      - name: stock_on_hand
+        type: INTEGER
+        role: measure
+        description: Stock disponible al último snapshot de catálogo.
+        synonyms: [stock, stock disponible]
+      - name: units_sold
+        type: INTEGER
+        role: measure
+        description: Unidades vendidas en pedidos con estado de venta.
+        synonyms: [unidades vendidas, ventas en unidades]
+      - name: units_returned
+        type: INTEGER
+        role: measure
+        description: Unidades devueltas.
+        synonyms: [unidades devueltas, devoluciones en unidades]
+      - name: gross_sales
+        type: DECIMAL(18,2)
+        role: measure
+        description: Venta bruta del SKU, en ARS.
+        synonyms: [venta bruta, ventas brutas]
+      - name: net_revenue
+        type: DECIMAL(18,2)
+        role: measure
+        description: Venta bruta menos descuentos de ítem menos reembolsos, en ARS.
+        synonyms: [ingreso neto, ingresos netos]
+      - name: return_rate
+        type: DECIMAL(9,4)
+        role: measure
+        description: units_returned / units_sold.
+        synonyms: [tasa de devolucion, devoluciones, tasa de devoluciones]
+      - name: high_return_flag
+        type: BOOLEAN
+        role: attribute
+        description: Verdadero si la tasa de devolución es 25% o más.
+        synonyms: [alta devolucion]
+      - name: avg_daily_units
+        type: DECIMAL(12,4)
+        role: measure
+        description: Unidades vendidas por día en el período de venta.
+        synonyms: [rotacion diaria, unidades por dia]
+      - name: days_of_cover
+        type: DECIMAL(12,2)
+        role: measure
+        description: Días de cobertura = stock_on_hand / avg_daily_units.
+        synonyms: [cobertura, dias de cobertura]
+      - name: stock_alert
+        type: VARCHAR
+        role: attribute
+        description: >
+          sin_stock (stock 0); sin_rotacion (sin ventas); reponer (cobertura menor a 14 días);
+          sobrestock (cobertura mayor a 180 días); ok en otro caso.
+        synonyms: [alerta de stock, estado de stock, alertas]
+      - name: period_days
+        type: INTEGER
+        role: attribute
+        description: Días del período de ventas considerado.
+        synonyms: [periodo]
+
+metrics:
+  - name: venta_bruta
+    display_name: Venta bruta
+    table: mart_daily_unit_economics
+    sql: SUM(gross_sales)
+    unit: currency
+    synonyms: [venta bruta, ventas brutas, bruto]
+    definition: Suma de cantidad x precio unitario de los pedidos con estado de venta.
+
+  - name: descuentos
+    display_name: Descuentos
+    table: mart_daily_unit_economics
+    sql: SUM(discounts_amount)
+    unit: currency
+    synonyms: [descuentos, descuento]
+    definition: Descuentos de ítem más descuentos de pedido.
+
+  - name: margen_neto
+    display_name: Margen neto
+    table: mart_daily_unit_economics
+    sql: SUM(net_margin_amount)
+    unit: currency
+    synonyms: [margen neto, margen, utilidad, rentabilidad]
+    definition: >
+      Ingreso neto menos comisiones de pasarela, costo de envío y costo de mercadería neto de
+      unidades devueltas.
+
+  - name: margen_neto_pct
+    display_name: Margen neto %
+    table: mart_daily_unit_economics
+    sql: SUM(net_margin_amount) / NULLIF(SUM(net_revenue), 0)
+    unit: ratio
+    synonyms: [margen neto porcentual, tasa de margen, margen porcentual]
+    definition: Margen neto dividido ingreso neto, calculado sobre las sumas.
+
+  - name: tasa_conversion
+    display_name: Tasa de conversión
+    table: mart_checkout_funnel
+    sql: SUM(payments_approved) * 1.0 / NULLIF(SUM(carts_created), 0)
+    unit: ratio
+    synonyms: [tasa de conversion, conversion, conversiones]
+    definition: >
+      Pagos aprobados dividido carritos creados, calculado sobre las sumas. Por medio de pago,
+      el denominador solo incluye sesiones con ese medio elegido (las sesiones sin checkout
+      caen en 'sin_seleccion'), por lo que la tasa por medio de pago equivale a la tasa de
+      aprobación sobre checkouts de ese medio.
+
+  - name: tasa_checkout
+    display_name: Tasa de inicio de checkout
+    table: mart_checkout_funnel
+    sql: SUM(checkouts_started) * 1.0 / NULLIF(SUM(carts_created), 0)
+    unit: ratio
+    synonyms: [tasa de checkout, inicio de checkout]
+    definition: Checkouts iniciados dividido carritos creados.
+
+  - name: tasa_devolucion
+    display_name: Tasa de devolución
+    table: mart_sku_health
+    sql: SUM(units_returned) * 1.0 / NULLIF(SUM(units_sold), 0)
+    unit: ratio
+    synonyms: [tasa de devolucion, tasa de devoluciones, devoluciones]
+    definition: Unidades devueltas dividido unidades vendidas.
+
+  - name: skus_en_alerta
+    display_name: SKUs en alerta de stock
+    table: mart_sku_health
+    sql: COUNT(CASE WHEN stock_alert IN ('sin_stock', 'reponer') THEN 1 END)
+    unit: count
+    synonyms: [alerta de stock, alertas de stock, en alerta, skus en alerta, reposicion]
+    definition: Cantidad de SKUs con stock_alert sin_stock o reponer.

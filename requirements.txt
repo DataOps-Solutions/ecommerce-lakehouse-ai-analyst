@@ -1,0 +1,16 @@
+deltalake==1.6.6
+duckdb==2.0.1
+pyarrow==26.0.1
+pyarrow-stubs==20.0.0.20260819
+pandas==3.1.1
+pydantic==2.14.4
+pydantic-settings==2.16.3
+PyYAML==6.0.4
+sqlglot==30.33.0
+boto3==1.44.9
+pytest==9.2.0
+ruff==0.17.6
+mypy==2.4.1
+pandas-stubs==3.1.0.261029
+types-PyYAML==6.0.12.20261122
+types-boto3==1.44.9
