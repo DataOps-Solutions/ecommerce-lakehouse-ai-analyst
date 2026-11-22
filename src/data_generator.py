@@ -77,10 +77,16 @@ FREE_SHIPPING_FROM = 60000.0
 
 @dataclass(frozen=True)
 class RawBatch:
-    """One raw landing batch: ``sources`` maps entity name to raw string records."""
+    """One raw landing batch: ``sources`` maps entity name to raw string records.
+
+    ``columns`` optionally fixes the schema per entity (needed when a batch has no rows).
+    ``source`` labels the origin system in Bronze metadata.
+    """
 
     batch_id: str
     sources: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    columns: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    source: str = RAW_SOURCE
 
 
 def _money(value: float) -> str:

@@ -52,6 +52,7 @@ class Category(StrEnum):
     CAMPERA = "campera"
     VESTIDO = "vestido"
     SHORT = "short"
+    OTHER = "otros"
 
 
 class Size(StrEnum):
@@ -60,6 +61,7 @@ class Size(StrEnum):
     M = "M"
     L = "L"
     XL = "XL"
+    UNIQUE = "UNICO"
 
 
 CURRENCY = "ARS"

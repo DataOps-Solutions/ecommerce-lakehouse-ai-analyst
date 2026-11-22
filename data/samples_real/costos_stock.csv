@@ -1,0 +1,32 @@
+﻿SKU;Producto;Categoría;Talle;Costo unitario;Precio de lista;Stock
+REM01-NEG-M;Remera básica algodón;remera;M;6.200,00;12.900,00;28
+REM01-NEG-L;Remera básica algodón;remera;L;6.200,00;12.900,00;35
+REM02-BLA-M;Remera oversize;remera;M;7.400,00;15.900,00;29
+REM02-BLA-S;Remera oversize;remera;S;7.400,00;15.900,00;
+REM03-NEG-XL;Remera estampada;remera;XL;8.100,00;17.500,00;32
+PAN01-AZU-38;Jean recto;pantalon;M;16.000,00;34.900,00;37
+PAN01-AZU-42;Jean recto;pantalon;L;16.000,00;34.900,00;12
+PAN02-GRI-M;Jogger French;pantalon;M;13.200,00;28.900,00;11
+PAN02-GRI-S;Jogger French;pantalon;S;13.200,00;28.900,00;32
+BUZ01-NEG-M;Buzo canguro;buzo;M;13.800,00;29.900,00;30
+BUZ01-NEG-L;Buzo canguro;buzo;L;13.800,00;29.900,00;40
+BUZ02-BLA-S;Buzo sin capucha;buzo;S;11.500,00;24.900,00;
+CAM01-NEG-M;Campera rompeviento;campera;M;21.000,00;45.900,00;11
+CAM01-NEG-XL;Campera rompeviento;campera;XL;21.000,00;45.900,00;6
+CAM02-AZU-L;Campera de jean;campera;L;;52.900,00;28
+VES01-NEG-S;Vestido midi;vestido;S;19.800,00;42.900,00;19
+VES01-NEG-M;Vestido midi;vestido;M;19.800,00;42.900,00;9
+VES02-VER-M;Vestido corto estampado;vestido;M;14.800,00;31.900,00;n/d
+SHO01-AZU-M;Short de baño;short;M;9.200,00;19.900,00;34
+SHO01-AZU-L;Short de baño;short;L;9.200,00;19.900,00;40
+SHO02-AZU-S;Short jean;short;S;10.600,00;22.900,00;2
+SHO03-NEG-M;Short deportivo;short;M;8.300,00;17.900,00;38
+SHO03-NEG-XL;Short deportivo;Shorts;XL;8.300,00;17.900,00;25
+REM04-BLA-M;Remera rib;Remera;M;6.600,00;14.200,00;28
+pan03_neg_m;Pantalón de vestir;pantalon;M;18.500,00;39.900,00;39
+BUZ03-GRI-M;Buzo polar;buzo;M;15.700,00;33.900,00;10
+CAM03-NEG-L;Campera acolchada;campera;L;32.000,00;68.900,00;39
+VES03-NEG-M;Vestido camisero;vestido;M;18.000,00;38.900,00;0
+SHO04-BEI-M;Short de lino;short;M;10.100,00;21.900,00;33
+PAN04-VER-L;Pantalón cargo;pantalon;L;;36.500,00;4
+REM05-NEG-M;Remera deportiva;remera;M;;15.500,00;3

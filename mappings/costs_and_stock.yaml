@@ -1,0 +1,42 @@
+# Mapeo de la planilla de costos y stock por SKU, y de las devoluciones.
+# Separador ";", decimal ",", fechas dd/mm/aaaa hh:mm (igual que generic_store_orders).
+name: costs_and_stock
+description: >
+  Costo unitario, precio de lista y stock por SKU, más las devoluciones. Un costo sin
+  informar se estima con el porcentaje indicado sobre el precio de lista y se marca como
+  estimado. Un SKU vendido que no está en la planilla usa una ficha provisoria, también
+  marcada como estimada.
+currency: ARS
+
+format:
+  encoding: utf-8-sig
+  delimiter: ";"
+  decimal: ","
+  date_format: "%d/%m/%Y %H:%M"
+
+estimation:
+  # Supuesto: costo de mercadería como proporción del precio de lista. Revisar con el cliente.
+  default_cost_ratio: 0.45
+
+sources:
+  products:
+    file: costos_stock.csv
+    columns:
+      sku: ["SKU", "Código SKU"]
+      product_name: ["Producto", "Nombre del producto"]
+      category: ["Categoría", "Rubro"]
+      size: ["Talle"]
+      unit_cost: ["Costo unitario", "Costo"]
+      list_price: ["Precio de lista", "Precio lista"]
+      stock_on_hand: ["Stock", "Stock disponible"]
+
+  returns:
+    file: devoluciones.csv
+    columns:
+      return_id: ["Número de devolución", "ID devolución"]
+      order_id: ["Número de pedido", "Pedido"]
+      sku: ["SKU", "Código SKU"]
+      return_date: ["Fecha de devolución", "Fecha"]
+      quantity: ["Cantidad"]
+      refund_amount: ["Monto reembolsado", "Reembolso"]
+      reason: ["Motivo"]

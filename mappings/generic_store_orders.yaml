@@ -1,0 +1,60 @@
+# Mapeo de la exportación de pedidos de una tienda o marketplace.
+# Formato esperado: una fila por línea de venta, separador ";", decimal ",",
+# fechas dd/mm/aaaa hh:mm. Las columnas del archivo se reconocen por alias
+# (no distingue mayúsculas, tildes, espacios ni guiones bajos).
+name: generic_store_orders
+description: >
+  Pedidos exportados desde la tienda o el marketplace, con una fila por línea de venta.
+  Los campos de contacto del cliente se eliminan antes de guardar; el identificador de
+  cliente se reemplaza por un código irreversible.
+currency: ARS
+
+format:
+  encoding: utf-8-sig
+  delimiter: ";"
+  decimal: ","
+  date_format: "%d/%m/%Y %H:%M"
+
+# Supuestos explícitos. Solo se usan cuando el export no trae el valor exacto, y todo
+# valor calculado con ellos queda marcado como "estimated". Reemplácelos por las tasas
+# reales de su pasarela cuando las tenga.
+estimation:
+  default_gateway_rate: 0.035
+  gateway_rates:
+    tarjeta_credito: 0.039
+    tarjeta_debito: 0.019
+    billetera_virtual: 0.029
+    transferencia: 0.006
+
+sources:
+  orders:
+    file: pedidos.csv
+    columns:
+      order_id: ["Número de pedido", "Nro pedido", "order_id"]
+      order_date: ["Fecha", "Fecha de creación", "created_at"]
+      order_status: ["Estado del pedido", "Estado"]
+      channel: ["Canal", "Canal de venta"]
+      sku: ["SKU", "Código SKU"]
+      product_name: ["Producto", "Nombre del producto"]
+      quantity: ["Cantidad"]
+      unit_price: ["Precio unitario", "Precio"]
+      line_discount: ["Descuento ítem", "Descuento del ítem"]
+      order_discount: ["Descuento del pedido", "Descuento total"]
+      shipping_cost: ["Costo de envío", "Envío"]
+      payment_method: ["Medio de pago", "Método de pago"]
+      payment_status: ["Estado del pago"]
+      amount_paid: ["Total pagado", "Total"]
+      gateway_fee: ["Comisión pasarela", "Comisión de la pasarela"]
+      customer_id: ["ID cliente", "Cliente ID"]
+      customer_name: ["Nombre del cliente", "Cliente"]
+      customer_email: ["Email", "Correo electrónico"]
+      customer_phone: ["Teléfono", "Telefono"]
+      customer_dni: ["DNI", "Documento"]
+      customer_address: ["Dirección", "Dirección de envío"]
+    sensitive:
+      customer_id: pseudonymize
+      customer_name: drop
+      customer_email: drop
+      customer_phone: drop
+      customer_dni: drop
+      customer_address: drop

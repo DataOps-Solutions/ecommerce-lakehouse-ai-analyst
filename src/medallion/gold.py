@@ -54,7 +54,7 @@ WITH sold AS (
 ),
 lines AS (
     SELECT s.order_date, s.channel, i.quantity, i.unit_price, i.discount_amount AS item_discount,
-           p.unit_cost
+           p.unit_cost, p.unit_cost_source
     FROM sold s
     JOIN silver_order_items i ON i.order_id = s.order_id
     JOIN silver_products p ON p.sku = i.sku
@@ -64,7 +64,10 @@ sales AS (
            SUM(quantity) AS units_sold,
            SUM(quantity * unit_price) AS gross_sales,
            SUM(item_discount) AS item_discounts,
-           SUM(quantity * unit_cost) AS cogs
+           SUM(quantity * unit_cost) AS cogs,
+           COUNT(*) AS sold_lines,
+           SUM(CASE WHEN unit_cost_source = 'estimated' THEN 1 ELSE 0 END)
+               AS estimated_cost_lines
     FROM lines GROUP BY 1, 2
 ),
 orders_agg AS (
@@ -75,7 +78,11 @@ orders_agg AS (
     FROM sold GROUP BY 1, 2
 ),
 fees AS (
-    SELECT s.order_date, s.channel, SUM(p.gateway_fee) AS gateway_fees
+    SELECT s.order_date, s.channel,
+           SUM(p.gateway_fee) AS gateway_fees,
+           COUNT(*) AS fee_payments,
+           SUM(CASE WHEN p.gateway_fee_source = 'estimated' THEN 1 ELSE 0 END)
+               AS estimated_fee_payments
     FROM sold s
     JOIN silver_payments p ON p.order_id = s.order_id
     WHERE p.payment_status IN ('approved', 'refunded')
@@ -106,6 +113,12 @@ SELECT g.order_date,
             AS DECIMAL(18,2)) AS net_revenue,
        CAST(COALESCE(f.gateway_fees, 0) AS DECIMAL(18,2)) AS gateway_fees_amount,
        CAST(COALESCE(o.shipping_cost, 0) AS DECIMAL(18,2)) AS shipping_cost_amount,
+       CAST(COALESCE(s.sold_lines, 0) AS INTEGER) AS sold_lines,
+       CAST(COALESCE(s.estimated_cost_lines, 0) AS INTEGER) AS estimated_cost_lines,
+       CAST(COALESCE(f.fee_payments, 0) AS INTEGER) AS fee_payments,
+       CAST(COALESCE(f.estimated_fee_payments, 0) AS INTEGER) AS estimated_fee_payments,
+       CASE WHEN COALESCE(s.estimated_cost_lines, 0) + COALESCE(f.estimated_fee_payments, 0) > 0
+            THEN 'estimated' ELSE 'exact' END AS data_quality,
        CAST(COALESCE(s.cogs, 0) - COALESCE(r.returned_cogs, 0) AS DECIMAL(18,2)) AS cogs_amount,
        CAST(
            (COALESCE(s.gross_sales, 0) - COALESCE(s.item_discounts, 0)
@@ -243,6 +256,7 @@ SELECT sku,
        CAST(avg_daily_units AS DECIMAL(12,4)) AS avg_daily_units,
        CAST(days_of_cover AS DECIMAL(12,2)) AS days_of_cover,
        CASE
+           WHEN stock_on_hand IS NULL THEN 'sin_datos_stock'
            WHEN stock_on_hand = 0 THEN 'sin_stock'
            WHEN units_sold = 0 THEN 'sin_rotacion'
            WHEN days_of_cover < {LOW_COVER_DAYS} THEN 'reponer'

@@ -92,6 +92,34 @@ authorized_tables:
         role: measure
         description: Margen neto sobre ingreso neto. Calcular con las sumas, no promediando filas.
         synonyms: [margen porcentual, tasa de margen]
+      - name: sold_lines
+        type: INTEGER
+        role: measure
+        description: Líneas de venta con estado de venta.
+        synonyms: [lineas de venta, lineas vendidas]
+      - name: estimated_cost_lines
+        type: INTEGER
+        role: measure
+        description: >
+          Líneas de venta cuyo costo unitario es estimado (no informado en la planilla de costos).
+        synonyms: [lineas con costo estimado, costos estimados]
+      - name: fee_payments
+        type: INTEGER
+        role: measure
+        description: Pagos aprobados o reembolsados de pedidos de la cohorte.
+        synonyms: [pagos]
+      - name: estimated_fee_payments
+        type: INTEGER
+        role: measure
+        description: Pagos cuya comisión de pasarela es estimada y no exacta.
+        synonyms: [pagos con comision estimada]
+      - name: data_quality
+        type: VARCHAR
+        role: attribute
+        description: >
+          exact si todos los costos y comisiones de la fila son informados; estimated si alguno
+          se estimó con supuestos declarados en el mapeo.
+        synonyms: [calidad del dato, origen del dato]
 
   - name: mart_checkout_funnel
     layer: gold
@@ -225,8 +253,9 @@ authorized_tables:
         type: VARCHAR
         role: attribute
         description: >
-          sin_stock (stock 0); sin_rotacion (sin ventas); reponer (cobertura menor a 14 días);
-          sobrestock (cobertura mayor a 180 días); ok en otro caso.
+          sin_datos_stock (stock no informado); sin_stock (stock 0); sin_rotacion (sin ventas);
+          reponer (cobertura menor a 14 días); sobrestock (cobertura mayor a 180 días); ok en
+          otro caso.
         synonyms: [alerta de stock, estado de stock, alertas]
       - name: period_days
         type: INTEGER

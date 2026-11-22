@@ -22,17 +22,27 @@ from src.lakehouse import read_table, table_exists, write_table
 
 
 def build_bronze_table(
-    entity: str, rows: list[dict[str, object]], batch_id: str, ingested_at: datetime
+    entity: str,
+    rows: list[dict[str, object]],
+    batch_id: str,
+    ingested_at: datetime,
+    source: str = RAW_SOURCE,
+    columns: tuple[str, ...] | None = None,
 ) -> pa.Table:
-    """Convert raw records of one entity into an Arrow table with metadata columns."""
-    columns = sorted({key for row in rows for key in row})
+    """Convert raw records of one entity into an Arrow table with metadata columns.
+
+    ``columns`` fixes the schema explicitly (required for empty batches); otherwise it is
+    the sorted union of the keys present in ``rows``.
+    """
+    if columns is None:
+        columns = tuple(sorted({key for row in rows for key in row}))
     data: dict[str, Any] = {}
     for col in columns:
         values = [None if row.get(col) is None else str(row.get(col)) for row in rows]
         data[col] = pa.array(values, type=pa.string())
     n = len(rows)
     data["_batch_id"] = pa.array([batch_id] * n, type=pa.string())
-    data["_source"] = pa.array([f"{RAW_SOURCE}.{entity}"] * n, type=pa.string())
+    data["_source"] = pa.array([f"{source}.{entity}"] * n, type=pa.string())
     data["_source_seq"] = pa.array(range(1, n + 1), type=pa.int64())
     data["_ingested_at"] = pa.array([ingested_at] * n, type=pa.timestamp("us"))
     return pa.table(data)
@@ -57,7 +67,14 @@ def ingest_batch(settings: Settings, batch: RawBatch, ingested_at: datetime) -> 
         if table_exists(uri, opts) and batch.batch_id in loaded_batch_ids(uri, opts):
             appended[entity] = 0
             continue
-        table = build_bronze_table(entity, list(rows), batch.batch_id, ingested_at)
+        table = build_bronze_table(
+            entity,
+            list(rows),
+            batch.batch_id,
+            ingested_at,
+            source=batch.source,
+            columns=batch.columns.get(entity),
+        )
         write_table(uri, table, opts, mode="append")
         appended[entity] = len(rows)
     return appended

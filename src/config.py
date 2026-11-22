@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     )
     sql_row_limit: int = Field(default=1000, ge=1, le=10000, validation_alias="SQL_ROW_LIMIT")
     data_seed: int = Field(default=20260101, validation_alias="DATA_SEED")
+    pseudonymization_salt: str | None = Field(
+        default=None, validation_alias="PSEUDONYMIZATION_SALT"
+    )
 
     def resolve_path(self, path: Path) -> Path:
         """Resolve relative paths against the project root."""

@@ -103,6 +103,10 @@ ORDER_STATUS_MAP = {
     "cancelled": OrderStatus.CANCELLED.value,
     "canceled": OrderStatus.CANCELLED.value,
     "cancelado": OrderStatus.CANCELLED.value,
+    "cancelada": OrderStatus.CANCELLED.value,
+    "pagada": OrderStatus.PAID.value,
+    "enviada": OrderStatus.SHIPPED.value,
+    "entregada": OrderStatus.DELIVERED.value,
 }
 CHANNEL_MAP = {
     "web": Channel.WEB.value,
@@ -113,8 +117,10 @@ CHANNEL_MAP = {
 }
 METHOD_MAP = {
     "tarjeta_credito": PaymentMethod.CREDIT_CARD.value,
+    "tarjeta_de_credito": PaymentMethod.CREDIT_CARD.value,
     "credit_card": PaymentMethod.CREDIT_CARD.value,
     "tarjeta_debito": PaymentMethod.DEBIT_CARD.value,
+    "tarjeta_de_debito": PaymentMethod.DEBIT_CARD.value,
     "debit_card": PaymentMethod.DEBIT_CARD.value,
     "billetera_virtual": PaymentMethod.WALLET.value,
     "wallet": PaymentMethod.WALLET.value,
@@ -132,6 +138,10 @@ PAYMENT_STATUS_MAP = {
     "pendiente": PaymentStatus.PENDING.value,
     "refunded": PaymentStatus.REFUNDED.value,
     "reembolsado": PaymentStatus.REFUNDED.value,
+    "aprobada": PaymentStatus.APPROVED.value,
+    "rechazada": PaymentStatus.REJECTED.value,
+    "pendiente_de_pago": PaymentStatus.PENDING.value,
+    "reembolsada": PaymentStatus.REFUNDED.value,
 }
 EVENT_TYPE_MAP = {
     "cart_created": CheckoutEventType.CART_CREATED.value,
@@ -143,6 +153,7 @@ EVENT_TYPE_MAP = {
     "payment_rejected": CheckoutEventType.PAYMENT_REJECTED.value,
     "pago_rechazado": CheckoutEventType.PAYMENT_REJECTED.value,
 }
+COST_SOURCES: tuple[str, ...] = ("exact", "estimated")
 CURRENCY_MAP = {"ARS": CURRENCY, "$": CURRENCY, "AR$": CURRENCY}
 CURRENCY_EXPR = _case_map("upper(trim(b.currency))", CURRENCY_MAP, "upper(trim(b.currency))")
 CATEGORIES = tuple(c.value for c in Category)
@@ -169,7 +180,9 @@ ENTITY_SPECS: tuple[EntitySpec, ...] = (
             NULLIF(upper(trim(b.size)), '') AS size,
             TRY_CAST(trim(b.unit_cost) AS DECIMAL(14,2)) AS unit_cost,
             TRY_CAST(trim(b.list_price) AS DECIMAL(14,2)) AS list_price,
-            TRY_CAST(trim(b.stock_on_hand) AS INTEGER) AS stock_on_hand
+            TRY_CAST(trim(b.stock_on_hand) AS INTEGER) AS stock_on_hand,
+            NULLIF(trim(b.stock_on_hand), '') IS NOT NULL AS stock_reported,
+            COALESCE(NULLIF(lower(trim(b.unit_cost_source)), ''), 'exact') AS unit_cost_source
         """,
         row_rules=(
             Rule("key_missing", "sku IS NULL"),
@@ -180,7 +193,14 @@ ENTITY_SPECS: tuple[EntitySpec, ...] = (
             Rule("invalid_size", _is_null_or("size", f"size IN ({_in_list(SIZES)})")),
             Rule("invalid_unit_cost", "unit_cost IS NULL OR unit_cost < 0"),
             Rule("invalid_list_price", "list_price IS NULL OR list_price <= 0"),
-            Rule("invalid_stock", "stock_on_hand IS NULL OR stock_on_hand < 0"),
+            Rule(
+                "invalid_stock",
+                "stock_on_hand < 0 OR (stock_reported AND stock_on_hand IS NULL)",
+            ),
+            Rule(
+                "invalid_unit_cost_source",
+                f"unit_cost_source NOT IN ({_in_list(COST_SOURCES)})",
+            ),
         ),
     ),
     EntitySpec(
@@ -248,6 +268,7 @@ ENTITY_SPECS: tuple[EntitySpec, ...] = (
             {_mapped("payment_status", PAYMENT_STATUS_MAP)} AS payment_status,
             TRY_CAST(trim(b.amount) AS DECIMAL(14,2)) AS amount,
             TRY_CAST(trim(b.gateway_fee) AS DECIMAL(14,2)) AS gateway_fee,
+            COALESCE(NULLIF(lower(trim(b.gateway_fee_source)), ''), 'exact') AS gateway_fee_source,
             {CURRENCY_EXPR} AS currency
         """,
         row_rules=(
@@ -268,6 +289,10 @@ ENTITY_SPECS: tuple[EntitySpec, ...] = (
                 "gateway_fee IS NULL OR gateway_fee < 0 OR gateway_fee > amount",
             ),
             Rule("invalid_currency", f"currency IS NULL OR currency <> '{CURRENCY}'"),
+            Rule(
+                "invalid_fee_source",
+                f"gateway_fee_source NOT IN ({_in_list(COST_SOURCES)})",
+            ),
         ),
         integrity_rules=(
             Rule("orphan_payment", "order_id NOT IN (SELECT order_id FROM silver_orders)"),
@@ -340,9 +365,24 @@ def _reasons_expr(rules: tuple[Rule, ...]) -> str:
     return f"COALESCE(array_to_string([{', '.join(parts)}], '; '), '')"
 
 
+OPTIONAL_BRONZE_COLUMNS: dict[str, tuple[str, ...]] = {
+    "products": ("unit_cost_source",),
+    "payments": ("gateway_fee_source",),
+}
+
+
+def _with_optional_columns(table: pa.Table, names: tuple[str, ...]) -> pa.Table:
+    """Add missing optional columns as NULL so older Bronze batches stay readable."""
+    for name in names:
+        if name not in table.column_names:
+            table = table.append_column(name, pa.nulls(table.num_rows, type=pa.string()))
+    return table
+
+
 def _register_bronze(con: duckdb.DuckDBPyConnection, bronze: Mapping[str, pa.Table]) -> None:
     for entity, table in bronze.items():
-        con.register(f"bronze_{entity}", table)
+        names = OPTIONAL_BRONZE_COLUMNS.get(entity, ())
+        con.register(f"bronze_{entity}", _with_optional_columns(table, names))
 
 
 def run_silver(bronze: Mapping[str, pa.Table], quarantined_at: datetime) -> SilverResult:
