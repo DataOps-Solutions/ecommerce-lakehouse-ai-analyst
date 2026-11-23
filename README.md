@@ -235,6 +235,55 @@ sources:
 - Silver valida que el JSON sea válido. Un valor mal formado va a cuarentena con el motivo `invalid_custom_attributes`.
 - La privacidad aplica también a los campos extra. Un campo cuyo nombre sugiere dato personal (`email`, `telefono`, `dni`, `nombre`, `direccion`, etc.) se elimina por defecto antes de guardar. Si un nombre no personal contiene una de esas palabras, renómbrelo en el mapeo, o declárelo explícitamente con `sensitive:` para seudonimizarlo.
 
+## API HTTP (FastAPI)
+
+La API expone la plataforma por HTTP. No contiene lógica de negocio propia: usa `app/services.py`, `src/engine/` y `src/ingestion/onboarding.py`. Lo que carga por API se guarda en el lakehouse de plataforma (`data/lakehouse_csv`, o `PLATFORM_LAKEHOUSE_DIR`), el mismo que usa `ingest-csv`. Por eso lo cargado aparece en el catálogo, el historial y el resumen.
+
+```bash
+make api            # uvicorn src.api.main:app en http://127.0.0.1:8000
+# documentación interactiva: http://127.0.0.1:8000/docs
+```
+
+Selección de workspace: las rutas con `{workspace_id}` lo llevan en la URL. Las rutas cortas (`/catalog`, `/runs`, `/summary`, `/analyst/query`) lo toman del parámetro `?workspace=` o del encabezado `X-Workspace-Id`, y por defecto usan `default`.
+
+| Método y ruta | Qué hace |
+|---|---|
+| `GET /health` | Estado, versión y tipo de almacenamiento. |
+| `GET /workspaces/{id}/runs?limit=` | Historial de ejecuciones del workspace. |
+| `GET /workspaces/{id}/runs/{run_id}` | Detalle de un run con todos sus eventos (`running`, `succeeded`, `failed`). |
+| `GET /workspaces/{id}/catalog` | Tablas registradas en DuckDB: capa, filas, columnas, tipos y si tienen `custom_attributes`. |
+| `GET /workspaces/{id}/summary` | KPIs, margen, estado exacto o estimado del dato, calidad por entidad y advertencias. |
+| `POST /workspaces/{id}/analyst/query` | Pregunta en lenguaje natural. Devuelve respuesta, SQL validada, tabla y bandera `exactness`. |
+| `POST /workspaces/{id}/ingest/inspect-csv` | Sube un CSV y devuelve encabezados, 5 filas de muestra, la fuente detectada, las columnas canónicas encontradas, los `custom_fields` sugeridos y un mapeo YAML validado. |
+| `POST /workspaces/{id}/ingest/csv` | Carga el mapeo (YAML o JSON, con `custom_fields`) y los CSV que indica su campo `file`. Crea un run y devuelve su `run_id`. |
+
+Errores: todos responden `{"error": {"code": ..., "message": ...}}`.
+
+| HTTP | Código | Cuándo |
+|---|---|---|
+| 400 | `invalid_workspace` | El identificador de workspace no es válido. |
+| 404 | `workspace_not_found` | El workspace no tiene datos. |
+| 404 | `run_not_found` | El `run_id` no existe en ese workspace. |
+| 404 | `no_gold_tables` | El workspace tiene datos, pero aún no se calcularon las tablas Gold. |
+| 422 | `empty_question` | La pregunta está vacía. |
+| 422 | `sql_rejected` | Los guardrails rechazaron la SQL generada. |
+| 422 | `mapping_invalid` | El mapeo no valida, faltan archivos o falta el salt de seudonimización. |
+| 422 | `file_invalid` | El archivo está vacío, no se puede leer o supera 20 MB. |
+
+Ejemplo de flujo de onboarding:
+
+```bash
+curl -F "file=@mis_ventas.csv" http://127.0.0.1:8000/workspaces/acme/ingest/inspect-csv
+# revisar mapping_yaml, ajustar y luego cargar:
+curl -F "mapping=@mapeo.yaml" -F "files=@mis_ventas.csv" \
+     http://127.0.0.1:8000/workspaces/acme/ingest/csv
+curl http://127.0.0.1:8000/workspaces/acme/runs
+```
+
+Para cargar datos reales hace falta `PSEUDONYMIZATION_SALT` en el entorno. Sin él, las cargas con identificadores de cliente se rechazan con `mapping_invalid`, y el intento queda registrado como run `failed`.
+
+Un intento de carga que falla antes de terminar no devuelve su `run_id` en la respuesta de error. Se puede encontrar en `GET /workspaces/{id}/runs`.
+
 ## Datos personales
 
 El tratamiento se aplica en el adaptador, antes de que cualquier valor llegue a Bronze. Los valores originales no se persisten en ninguna capa ni en los reportes.
@@ -265,6 +314,10 @@ ingestion/privacy.py             eliminación y seudonimización de datos person
 engine/workspace.py              workspace (tenant) y resolución única de rutas
 engine/runs.py                   registro de ejecuciones (run_events en Delta)
 engine/catalog.py                catálogo DuckDB sobre las tablas Delta
+ingestion/onboarding.py          detección de encabezados y mapeo sugerido para CSV nuevos
+api/main.py                      aplicación FastAPI (rutas, CORS, ingesta por API)
+api/schemas.py                   modelos de request y response
+api/errors.py                    errores de dominio con códigos HTTP
 analyst/semantic.py              carga y validación de semantic_layer/metrics.yaml
 analyst/sql_guardrails.py        validador de solo lectura
 analyst/bi_agent.py              proveedores mock/bedrock, ejecución y lectura
@@ -285,6 +338,7 @@ Lo que está verificado en este repositorio:
 - Los números de Gold de un caso de prueba pequeño se comparan con valores calculados a mano (margen neto, reembolsos, comisiones).
 - Las métricas de Gold del pipeline completo se recalculan de forma independiente desde Silver.
 - Ejecución completa en almacenamiento S3 contra un servidor S3 simulado (`moto`). La segunda corrida no duplica Bronze (idempotencia).
+- API: 22 pruebas con `TestClient` cubren aislamiento entre workspaces, el contrato de errores, la sugerencia de mapeo, la ingesta con campos personalizados y el registro de runs fallidos.
 - Motor: el workspace por defecto conserva las rutas anteriores; un workspace distinto queda aislado; cada ejecución exitosa o fallida se registra con sus métricas; el catálogo expone los esquemas.
 - Campos personalizados: los valores extra llegan a Silver como JSON, las columnas canónicas no cambian, el JSON inválido va a cuarentena y un campo de nombre personal no sale del adaptador.
 - Ingesta CSV con datos ficticios: el margen con costos y comisiones exactos se calcula a mano y coincide; con costo estimado queda marcado como `estimated`; ningún dato personal de la muestra llega a Bronze, Silver, Gold ni al resumen; la segunda carga no duplica Bronze.

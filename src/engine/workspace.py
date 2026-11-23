@@ -45,10 +45,13 @@ class Workspace:
         if self.storage == "s3":
             segment = "" if self.is_default else f"workspaces/{self.workspace_id}/"
             return f"s3://{self.s3_bucket}/{self.s3_prefix}/{segment}{layer}/{name}"
-        base = self.local_root
-        if not self.is_default:
-            base = base / "workspaces" / self.workspace_id
-        return str(base / layer / name)
+        return str(self.local_dir() / layer / name)
+
+    def local_dir(self) -> Path:
+        """Root folder of this workspace on the local filesystem."""
+        if self.is_default:
+            return self.local_root
+        return self.local_root / "workspaces" / self.workspace_id
 
     def run_events_uri(self) -> str:
         return self.table_uri(RUN_EVENTS_LAYER, RUN_EVENTS_TABLE)

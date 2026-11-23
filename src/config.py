@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     sql_row_limit: int = Field(default=1000, ge=1, le=10000, validation_alias="SQL_ROW_LIMIT")
     data_seed: int = Field(default=20260101, validation_alias="DATA_SEED")
     workspace_id: str = Field(default="default", validation_alias="WORKSPACE_ID")
+    platform_lakehouse_dir: Path = Field(
+        default=Path("data/lakehouse_csv"), validation_alias="PLATFORM_LAKEHOUSE_DIR"
+    )
     pseudonymization_salt: str | None = Field(
         default=None, validation_alias="PSEUDONYMIZATION_SALT"
     )

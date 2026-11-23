@@ -2,7 +2,7 @@ PYTHON ?= python3
 VENV ?= .venv
 BIN := $(VENV)/bin
 
-.PHONY: setup pipeline demo ingest-sample runs ui test lint clean
+.PHONY: setup pipeline demo ingest-sample runs ui api test lint clean
 
 setup:
 	$(PYTHON) -m venv $(VENV)
@@ -31,6 +31,9 @@ runs:
 
 ui:
 	$(BIN)/streamlit run app/dashboard.py
+
+api:
+	$(BIN)/uvicorn src.api.main:app --host 127.0.0.1 --port 8000 --reload
 
 test:
 	$(BIN)/python -m pytest

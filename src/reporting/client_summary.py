@@ -201,7 +201,7 @@ def _sold_orders_without_payment(silver: dict[str, pa.Table]) -> int:
     return len(orders - with_fee)
 
 
-def _reason_list(reasons: Counter[str], limit: int = 3) -> list[str]:
+def reason_list(reasons: Counter[str], limit: int = 3) -> list[str]:
     ordered = sorted(reasons.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]
     return [f"{REASON_ES.get(name, name)} ({count})" for name, count in ordered]
 
@@ -220,7 +220,7 @@ def _quality_lines(quality: list[EntityQualityReport]) -> list[QualityLine]:
                 rows_read=item.bronze_rows,
                 rows_used=item.silver_rows,
                 rows_excluded=item.quarantine_rows,
-                main_reasons=_reason_list(reasons),
+                main_reasons=reason_list(reasons),
             )
         )
     return lines
