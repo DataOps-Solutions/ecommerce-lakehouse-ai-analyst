@@ -18,6 +18,7 @@ import pyarrow.compute as pc
 
 from src.config import Settings
 from src.data_generator import RAW_SOURCE, RawBatch
+from src.engine.workspace import Workspace
 from src.lakehouse import read_table, table_exists, write_table
 
 
@@ -55,15 +56,21 @@ def loaded_batch_ids(uri: str, storage_options: dict[str, str] | None) -> set[st
     return {str(value) for value in unique}
 
 
-def ingest_batch(settings: Settings, batch: RawBatch, ingested_at: datetime) -> dict[str, int]:
+def ingest_batch(
+    settings: Settings,
+    batch: RawBatch,
+    ingested_at: datetime,
+    workspace: Workspace | None = None,
+) -> dict[str, int]:
     """Append one raw batch to ``bronze/<entity>``. Re-running the same batch is a no-op.
 
     Returns the number of rows appended per entity (0 when the batch was already loaded).
     """
     opts = settings.storage_options()
+    ws = workspace or settings.workspace()
     appended: dict[str, int] = {}
     for entity, rows in batch.sources.items():
-        uri = settings.table_uri("bronze", entity)
+        uri = ws.table_uri("bronze", entity)
         if table_exists(uri, opts) and batch.batch_id in loaded_batch_ids(uri, opts):
             appended[entity] = 0
             continue

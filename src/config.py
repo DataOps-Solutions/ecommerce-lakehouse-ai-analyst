@@ -8,6 +8,8 @@ from typing import Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from src.engine.workspace import Workspace
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -49,6 +51,7 @@ class Settings(BaseSettings):
     )
     sql_row_limit: int = Field(default=1000, ge=1, le=10000, validation_alias="SQL_ROW_LIMIT")
     data_seed: int = Field(default=20260101, validation_alias="DATA_SEED")
+    workspace_id: str = Field(default="default", validation_alias="WORKSPACE_ID")
     pseudonymization_salt: str | None = Field(
         default=None, validation_alias="PSEUDONYMIZATION_SALT"
     )
@@ -57,11 +60,19 @@ class Settings(BaseSettings):
         """Resolve relative paths against the project root."""
         return path if path.is_absolute() else PROJECT_ROOT / path
 
+    def workspace(self, workspace_id: str | None = None) -> Workspace:
+        """Workspace for this configuration; defaults to ``WORKSPACE_ID``."""
+        return Workspace(
+            workspace_id=self.workspace_id if workspace_id is None else workspace_id,
+            storage=self.lakehouse_storage,
+            local_root=self.resolve_path(self.lakehouse_local_dir),
+            s3_bucket=self.s3_bucket,
+            s3_prefix=self.s3_prefix,
+        )
+
     def table_uri(self, layer: str, name: str) -> str:
-        """Return the Delta table URI for a layer/table pair (local path or s3:// URI)."""
-        if self.lakehouse_storage == "s3":
-            return f"s3://{self.s3_bucket}/{self.s3_prefix}/{layer}/{name}"
-        return str(self.resolve_path(self.lakehouse_local_dir) / layer / name)
+        """Delta table URI for a layer/table pair in the configured workspace."""
+        return self.workspace().table_uri(layer, name)
 
     def storage_options(self) -> dict[str, str] | None:
         """Options passed to ``deltalake``. ``None`` for local storage."""

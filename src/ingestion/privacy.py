@@ -18,7 +18,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from src.ingestion.mapping import PERSONAL_FIELDS, MappingError
+from src.ingestion.mapping import PERSONAL_FIELDS, SENSITIVE_HINTS, MappingError, normalize_header
 
 Action = Literal["drop", "pseudonymize"]
 
@@ -27,6 +27,12 @@ DEFAULT_SENSITIVE: dict[str, Action] = {
     **{field: "drop" for field in PERSONAL_FIELDS},
     "customer_id": "pseudonymize",
 }
+
+
+def looks_personal(name: str) -> bool:
+    """Heuristic on a field name (accent and separator insensitive) for personal data."""
+    normalized = normalize_header(name)
+    return any(hint in normalized for hint in SENSITIVE_HINTS)
 
 
 class FieldPrivacyStats(BaseModel):
@@ -62,15 +68,28 @@ class PrivacyPolicy:
         sensitive_by_source: dict[str, dict[str, Action]],
         mapped_fields: dict[str, set[str]],
         salt: str | None,
+        custom_by_source: dict[str, set[str]] | None = None,
     ) -> PrivacyPolicy:
-        """Build the policy: defaults first, then mapping overrides, only for mapped fields."""
+        """Build the policy from canonical defaults, custom-field heuristics and overrides.
+
+        Custom attributes whose names look personal (email, phone, dni, name...) are dropped
+        by default. Renaming the attribute in the mapping is the way to keep a non-personal
+        field whose name happens to contain one of those words.
+        """
+        customs = custom_by_source or {}
         actions: dict[tuple[str, str], Action] = {}
         for source, fields in mapped_fields.items():
             for field in fields:
                 if field in DEFAULT_SENSITIVE:
                     actions[(source, field)] = DEFAULT_SENSITIVE[field]
-            for field, action in sensitive_by_source.get(source, {}).items():
-                if field in fields:
+        for source, names in customs.items():
+            for name in names:
+                if looks_personal(name):
+                    actions[(source, name)] = "drop"
+        for source, overrides in sensitive_by_source.items():
+            allowed = mapped_fields.get(source, set()) | customs.get(source, set())
+            for field, action in overrides.items():
+                if field in allowed:
                     actions[(source, field)] = action
         return cls(actions, salt)
 

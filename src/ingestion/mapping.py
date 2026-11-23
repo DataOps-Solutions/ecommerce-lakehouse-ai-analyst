@@ -14,6 +14,7 @@ Canonical sources:
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from pathlib import Path
 from typing import Literal
@@ -121,11 +122,19 @@ class CsvFormat(BaseModel):
         return value
 
 
+CUSTOM_FIELD_NAME = re.compile(r"^[a-z][a-z0-9_]{1,39}$")
+
+
 class SourceSpec(BaseModel):
-    """One exported file and the mapping of its headers to canonical fields."""
+    """One exported file and the mapping of its headers to canonical fields.
+
+    ``custom_fields`` declares extra attributes (for example ``color`` or ``material``). They
+    are kept as JSON in the ``custom_attributes`` column, never as canonical columns.
+    """
 
     file: str
     columns: dict[str, list[str]]
+    custom_fields: dict[str, list[str]] = Field(default_factory=dict)
     sensitive: dict[str, Literal["drop", "pseudonymize"]] = Field(default_factory=dict)
 
 
@@ -171,7 +180,17 @@ class MappingFile(BaseModel):
                 raise ValueError(
                     f"mapping {self.name} lacks required fields for {source}: {missing}"
                 )
-            bad_sensitive = sorted(set(spec.sensitive) - set(known))
+            for name, aliases in spec.custom_fields.items():
+                if not CUSTOM_FIELD_NAME.match(name):
+                    raise ValueError(
+                        f"invalid custom field name '{name}' in {source}: use lowercase "
+                        "snake_case, 2-40 characters"
+                    )
+                if name in known:
+                    raise ValueError(f"custom field '{name}' collides with a canonical field")
+                if not aliases:
+                    raise ValueError(f"custom field '{name}' in {source} has no column aliases")
+            bad_sensitive = sorted(set(spec.sensitive) - set(known) - set(spec.custom_fields))
             if bad_sensitive:
                 raise ValueError(f"unknown sensitive fields for {source}: {bad_sensitive}")
         return self
@@ -189,6 +208,24 @@ def load_mapping(path: Path) -> MappingFile:
         return MappingFile.model_validate(raw)
     except ValueError as exc:
         raise MappingError(f"invalid mapping {path}: {exc}") from exc
+
+
+def resolve_custom_columns(headers: list[str], spec: SourceSpec) -> dict[str, str]:
+    """Custom attribute name -> actual header, for the custom fields present in the file.
+
+    Missing custom columns are not an error: the attribute is simply absent for every row.
+    """
+    by_normalized: dict[str, str] = {}
+    for header in headers:
+        by_normalized.setdefault(normalize_header(header), header)
+    resolved: dict[str, str] = {}
+    for name, aliases in spec.custom_fields.items():
+        for alias in aliases:
+            actual = by_normalized.get(normalize_header(alias))
+            if actual is not None:
+                resolved[name] = actual
+                break
+    return resolved
 
 
 def resolve_columns(headers: list[str], spec: SourceSpec, source: str) -> dict[str, str]:

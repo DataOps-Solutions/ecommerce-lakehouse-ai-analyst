@@ -20,6 +20,8 @@ import pyarrow as pa
 from src.analyst.bi_agent import BiAnalyst, provider_for
 from src.analyst.semantic import load_semantic_layer
 from src.config import PROJECT_ROOT, Settings
+from src.engine.catalog import LakehouseCatalog
+from src.engine.runs import RunTracker
 from src.ingestion.csv_adapter import EstimationStats, IngestionReport
 from src.ingestion.mapping import MappingError, load_mapping
 from src.models import AnalystResponse, EntityQualityReport
@@ -373,3 +375,38 @@ def ask(settings: Settings, ds: Dataset, question: str) -> AnalystResponse:
 
 def summary_caveats(ds: Dataset) -> list[str]:
     return list(ds.summary.caveats)
+
+
+def catalog_overview(settings: Settings, workspace_id: str | None = None) -> pd.DataFrame:
+    """Tables of a workspace as DuckDB sees them: layer, name, rows and column count."""
+    catalog = LakehouseCatalog(settings.workspace(workspace_id), settings.storage_options())
+    rows = [
+        {
+            "Capa": info.layer,
+            "Tabla": info.name,
+            "Filas": info.rows,
+            "Columnas": len(info.columns),
+            "Atributos personalizados": "sí" if info.has_custom_attributes else "no",
+        }
+        for info in catalog.inspect()
+    ]
+    return pd.DataFrame(rows)
+
+
+def recent_runs_frame(settings: Settings, workspace_id: str | None = None) -> pd.DataFrame:
+    """Latest registered runs of a workspace, in Spanish, for the operations view."""
+    tracker = RunTracker(settings.workspace(workspace_id), settings.storage_options())
+    rows = [
+        {
+            "Run": run.run_id,
+            "Proceso": run.pipeline_name,
+            "Estado": run.status,
+            "Inicio": run.started_at.strftime("%Y-%m-%d %H:%M"),
+            "Filas de entrada": run.metrics.rows_in,
+            "Filas en cuarentena": run.metrics.quarantine_rows,
+            "Costo estimado %": run.metrics.estimated_cost_pct,
+            "Error": run.error_message or "",
+        }
+        for run in tracker.list_runs(limit=20)
+    ]
+    return pd.DataFrame(rows)

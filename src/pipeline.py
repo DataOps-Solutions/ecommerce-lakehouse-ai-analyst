@@ -5,27 +5,31 @@ Two entry points share the same Silver -> Gold -> audit materialization:
 * :func:`run_pipeline`: deterministic synthetic dataset (demo and tests).
 * :func:`run_csv_ingestion`: real exports described by declarative mappings.
 
-Bronze is append-only and idempotent per batch; Silver, quarantine and Gold are rebuilt
-deterministically from Bronze on every run.
+Both run inside a :class:`~src.engine.runs.RunTracker` context, so every execution leaves a
+record with its status, counts and estimated share of the data. Bronze is append-only and
+idempotent per batch; Silver, quarantine and Gold are rebuilt from Bronze on every run.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
-from uuid import uuid4
 
 import pyarrow as pa
 
 from src.config import Settings
 from src.data_generator import generate_batches
+from src.engine.catalog import LakehouseCatalog
+from src.engine.runs import RunMetrics, RunTracker, utc_now
+from src.engine.workspace import Workspace
 from src.ingestion.csv_adapter import IngestionReport, ingest_files
-from src.lakehouse import read_table, table_exists, write_table
+from src.lakehouse import read_table, write_table
 from src.medallion.bronze import ingest_batch
 from src.medallion.gold import GOLD_TABLES, SILVER_ENTITIES, build_gold
 from src.medallion.silver import run_silver
 from src.models import RAW_ENTITIES, AuditRecord, PipelineRunReport
+from src.reporting.client_summary import econ_totals
 
 
 @dataclass
@@ -46,24 +50,39 @@ class CsvRunOutcome:
     ingestion: IngestionReport
 
 
-def _utc_naive() -> datetime:
-    return datetime.now(UTC).replace(tzinfo=None)
-
-
 def _audit_table(records: list[AuditRecord]) -> pa.Table:
     return pa.Table.from_pylist([r.model_dump() for r in records])
 
 
+def _run_metrics(outcome: RunOutcome, rows_in: int) -> RunMetrics:
+    """Counts and estimated shares for the run registry, from the same numbers as the report."""
+    totals = econ_totals(outcome.gold)
+    cost_pct = fee_pct = None
+    if totals is not None:
+        if totals.cost_exact_share is not None:
+            cost_pct = round((1 - totals.cost_exact_share) * 100, 2)
+        if totals.fee_exact_share is not None:
+            fee_pct = round((1 - totals.fee_exact_share) * 100, 2)
+    return RunMetrics(
+        rows_in=rows_in,
+        rows_out=sum(r.silver_rows for r in outcome.report.entities),
+        quarantine_rows=sum(r.quarantine_rows for r in outcome.report.entities),
+        estimated_cost_pct=cost_pct,
+        estimated_fee_pct=fee_pct,
+    )
+
+
 def materialize(
     settings: Settings,
+    workspace: Workspace,
     batches_loaded: dict[str, int],
     started: datetime,
     run_id: str,
 ) -> RunOutcome:
-    """Silver, quarantine and Gold from the full Bronze state, then audit."""
+    """Silver, quarantine and Gold from the full Bronze state of a workspace, then audit."""
     opts = settings.storage_options()
     bronze = {
-        entity: read_table(settings.table_uri("bronze", entity), opts) for entity in RAW_ENTITIES
+        entity: read_table(workspace.table_uri("bronze", entity), opts) for entity in RAW_ENTITIES
     }
     silver = run_silver(bronze, quarantined_at=started)
 
@@ -75,28 +94,28 @@ def materialize(
                 run_id=run_id,
                 layer=layer,
                 table=table,
-                action="append" if layer == "bronze" else "overwrite",
+                action="overwrite",
                 rows=rows,
-                created_at=_utc_naive(),
+                created_at=utc_now(),
             )
         )
 
     for entity, table in silver.tables.items():
-        write_table(settings.table_uri("silver", entity), table, opts, mode="overwrite")
+        write_table(workspace.table_uri("silver", entity), table, opts, mode="overwrite")
         record("silver", entity, table.num_rows)
     for entity, table in silver.quarantine.items():
-        write_table(settings.table_uri("quarantine", entity), table, opts, mode="overwrite")
+        write_table(workspace.table_uri("quarantine", entity), table, opts, mode="overwrite")
         record("quarantine", entity, table.num_rows)
 
     gold = build_gold({e: silver.tables[e] for e in SILVER_ENTITIES})
     gold_rows: dict[str, int] = {}
     for name in GOLD_TABLES:
-        write_table(settings.table_uri("gold", name), gold[name], opts, mode="overwrite")
+        write_table(workspace.table_uri("gold", name), gold[name], opts, mode="overwrite")
         gold_rows[name] = gold[name].num_rows
         record("gold", name, gold[name].num_rows)
 
     write_table(
-        settings.table_uri("audit", "pipeline_runs"),
+        workspace.table_uri("audit", "pipeline_runs"),
         _audit_table(audit),
         opts,
         mode="append",
@@ -104,7 +123,7 @@ def materialize(
     report = PipelineRunReport(
         run_id=run_id,
         started_at=started,
-        finished_at=_utc_naive(),
+        finished_at=utc_now(),
         storage=settings.lakehouse_storage,
         batches_loaded=batches_loaded,
         entities=silver.reports,
@@ -118,15 +137,19 @@ def materialize(
     )
 
 
-def run_pipeline(settings: Settings) -> RunOutcome:
+def run_pipeline(settings: Settings, workspace_id: str | None = None) -> RunOutcome:
     """Synthetic flow: generate the seeded batches, ingest them and materialize."""
-    run_id = uuid4().hex[:12]
-    started = _utc_naive()
-    batch_rows: dict[str, int] = {}
-    for batch in generate_batches(settings.data_seed):
-        appended = ingest_batch(settings, batch, started)
-        batch_rows[batch.batch_id] = sum(appended.values())
-    return materialize(settings, batch_rows, started, run_id)
+    workspace = settings.workspace(workspace_id)
+    tracker = RunTracker(workspace, settings.storage_options())
+    started = utc_now()
+    with tracker.track("synthetic_pipeline") as handle:
+        batch_rows: dict[str, int] = {}
+        for batch in generate_batches(settings.data_seed):
+            appended = ingest_batch(settings, batch, started, workspace)
+            batch_rows[batch.batch_id] = sum(appended.values())
+        outcome = materialize(settings, workspace, batch_rows, started, handle.run_id)
+        handle.metrics = _run_metrics(outcome, rows_in=sum(batch_rows.values()))
+    return outcome
 
 
 def csv_settings(settings: Settings, lakehouse_dir: Path) -> Settings:
@@ -141,31 +164,35 @@ def run_csv_ingestion(
     input_dir: Path,
     mapping_paths: list[Path],
     lakehouse_dir: Path,
+    workspace_id: str | None = None,
 ) -> CsvRunOutcome:
-    """Real-data flow: CSV exports -> raw batch -> Silver -> Gold -> audit."""
+    """Real-data flow: CSV exports -> raw batch -> Silver -> Gold -> audit.
+
+    Configuration errors raise after being recorded as a ``failed`` run.
+    """
     target = csv_settings(settings, lakehouse_dir)
-    run_id = uuid4().hex[:12]
-    started = _utc_naive()
-    result = ingest_files(input_dir, mapping_paths, settings.pseudonymization_salt)
-    appended = ingest_batch(target, result.batch, started)
-    outcome = materialize(
-        target,
-        {result.batch.batch_id: sum(appended.values())},
-        started,
-        run_id,
-    )
+    workspace = target.workspace(workspace_id)
+    tracker = RunTracker(workspace, target.storage_options())
+    started = utc_now()
+    with tracker.track("csv_ingestion") as handle:
+        result = ingest_files(input_dir, mapping_paths, settings.pseudonymization_salt)
+        appended = ingest_batch(target, result.batch, started, workspace)
+        outcome = materialize(
+            target,
+            workspace,
+            {result.batch.batch_id: sum(appended.values())},
+            started,
+            handle.run_id,
+        )
+        rows_in = sum(f.rows_read for f in result.report.files)
+        handle.metrics = _run_metrics(outcome, rows_in=rows_in)
     return CsvRunOutcome(outcome=outcome, ingestion=result.report)
 
 
-def load_gold_tables(settings: Settings) -> dict[str, pa.Table]:
-    """Read the current Gold snapshot. Raises if the pipeline has not run yet."""
-    opts = settings.storage_options()
-    missing = [
-        name for name in GOLD_TABLES if not table_exists(settings.table_uri("gold", name), opts)
-    ]
-    if missing:
-        raise RuntimeError(
-            f"faltan tablas Gold {missing}. Ejecute primero: make pipeline "
-            "(o python -m src.main run-pipeline)"
-        )
-    return {name: read_table(settings.table_uri("gold", name), opts) for name in GOLD_TABLES}
+def load_gold_tables(settings: Settings, workspace_id: str | None = None) -> dict[str, pa.Table]:
+    """Read the current Gold snapshot of a workspace through the catalog.
+
+    Raises :class:`~src.engine.catalog.MissingGoldError` if the pipeline has not run yet.
+    """
+    catalog = LakehouseCatalog(settings.workspace(workspace_id), settings.storage_options())
+    return catalog.read_gold()

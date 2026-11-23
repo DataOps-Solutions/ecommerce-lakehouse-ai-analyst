@@ -182,7 +182,8 @@ ENTITY_SPECS: tuple[EntitySpec, ...] = (
             TRY_CAST(trim(b.list_price) AS DECIMAL(14,2)) AS list_price,
             TRY_CAST(trim(b.stock_on_hand) AS INTEGER) AS stock_on_hand,
             NULLIF(trim(b.stock_on_hand), '') IS NOT NULL AS stock_reported,
-            COALESCE(NULLIF(lower(trim(b.unit_cost_source)), ''), 'exact') AS unit_cost_source
+            COALESCE(NULLIF(lower(trim(b.unit_cost_source)), ''), 'exact') AS unit_cost_source,
+            NULLIF(trim(b.custom_attributes), '') AS custom_attributes
         """,
         row_rules=(
             Rule("key_missing", "sku IS NULL"),
@@ -200,6 +201,10 @@ ENTITY_SPECS: tuple[EntitySpec, ...] = (
             Rule(
                 "invalid_unit_cost_source",
                 f"unit_cost_source NOT IN ({_in_list(COST_SOURCES)})",
+            ),
+            Rule(
+                "invalid_custom_attributes",
+                "custom_attributes IS NOT NULL AND NOT json_valid(custom_attributes)",
             ),
         ),
     ),
@@ -238,7 +243,8 @@ ENTITY_SPECS: tuple[EntitySpec, ...] = (
             NULLIF(upper(replace(trim(b.sku), '_', '-')), '') AS sku,
             TRY_CAST(trim(b.quantity) AS INTEGER) AS quantity,
             TRY_CAST(trim(b.unit_price) AS DECIMAL(14,2)) AS unit_price,
-            TRY_CAST(trim(b.discount_amount) AS DECIMAL(14,2)) AS discount_amount
+            TRY_CAST(trim(b.discount_amount) AS DECIMAL(14,2)) AS discount_amount,
+            NULLIF(trim(b.custom_attributes), '') AS custom_attributes
         """,
         row_rules=(
             Rule("key_missing", "order_item_id IS NULL"),
@@ -250,6 +256,10 @@ ENTITY_SPECS: tuple[EntitySpec, ...] = (
                 "invalid_discount",
                 "discount_amount IS NULL OR discount_amount < 0 "
                 "OR discount_amount > unit_price * quantity",
+            ),
+            Rule(
+                "invalid_custom_attributes",
+                "custom_attributes IS NOT NULL AND NOT json_valid(custom_attributes)",
             ),
         ),
         integrity_rules=(
@@ -308,7 +318,8 @@ ENTITY_SPECS: tuple[EntitySpec, ...] = (
             TRY_CAST(trim(b.return_ts) AS TIMESTAMP) AS return_ts,
             TRY_CAST(trim(b.quantity) AS INTEGER) AS quantity,
             TRY_CAST(trim(b.refund_amount) AS DECIMAL(14,2)) AS refund_amount,
-            NULLIF(lower(trim(b.reason)), '') AS reason
+            NULLIF(lower(trim(b.reason)), '') AS reason,
+            NULLIF(trim(b.custom_attributes), '') AS custom_attributes
         """,
         row_rules=(
             Rule("key_missing", "return_id IS NULL"),
@@ -317,6 +328,10 @@ ENTITY_SPECS: tuple[EntitySpec, ...] = (
             Rule("invalid_return_ts", "return_ts IS NULL"),
             Rule("invalid_quantity", "quantity IS NULL OR quantity <= 0"),
             Rule("invalid_refund", "refund_amount IS NULL OR refund_amount <= 0"),
+            Rule(
+                "invalid_custom_attributes",
+                "custom_attributes IS NOT NULL AND NOT json_valid(custom_attributes)",
+            ),
         ),
         integrity_rules=(
             Rule("orphan_return", "order_id NOT IN (SELECT order_id FROM silver_orders)"),
@@ -366,8 +381,10 @@ def _reasons_expr(rules: tuple[Rule, ...]) -> str:
 
 
 OPTIONAL_BRONZE_COLUMNS: dict[str, tuple[str, ...]] = {
-    "products": ("unit_cost_source",),
+    "products": ("unit_cost_source", "custom_attributes"),
+    "order_items": ("custom_attributes",),
     "payments": ("gateway_fee_source",),
+    "returns": ("custom_attributes",),
 }
 
 

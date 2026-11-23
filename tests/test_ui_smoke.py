@@ -107,3 +107,18 @@ def test_dashboard_script_runs_without_exceptions(
     assert not app.exception
     assert len(app.tabs) == 3
     assert len(app.metric) >= 4
+
+
+def test_catalog_and_runs_views_work_for_the_sample(tmp_path: Path) -> None:
+    from app.services import catalog_overview, recent_runs_frame
+
+    settings = _settings(tmp_path)
+    load_sample(settings)
+    # The sample is stored in its own lakehouse; the views must point there.
+    csv_settings = settings.model_copy(update={"lakehouse_local_dir": tmp_path / "lakehouse_csv"})
+    catalog = catalog_overview(csv_settings)
+    assert {"silver_products", "mart_sku_health"} <= set(catalog["Tabla"])
+    assert set(catalog["Atributos personalizados"]) <= {"sí", "no"}
+    runs = recent_runs_frame(csv_settings)
+    assert list(runs["Proceso"]) == ["csv_ingestion"]
+    assert list(runs["Estado"]) == ["succeeded"]

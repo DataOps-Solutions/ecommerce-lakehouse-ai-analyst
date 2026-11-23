@@ -57,6 +57,7 @@ REASON_ES: dict[str, str] = {
     "invalid_list_price": "precio de lista inválido",
     "invalid_category": "categoría no reconocida",
     "invalid_size": "talle no reconocido",
+    "invalid_custom_attributes": "atributos personalizados con formato inválido",
 }
 ENTITY_ES: dict[str, str] = {
     "products": "Productos",

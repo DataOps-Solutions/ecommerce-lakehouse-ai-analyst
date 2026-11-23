@@ -196,6 +196,45 @@ El margen solo se presenta como firme cuando sus componentes son exactos. Cuando
 
 En Gold, cada fila de `mart_daily_unit_economics` lleva `data_quality` (`exact` o `estimated`), el conteo de líneas y pagos estimados, y el resumen para el cliente lo informa como advertencia. Los supuestos del repositorio (`default_cost_ratio: 0.45` y las tasas de pasarela) son valores de referencia. Reemplácelos por los reales antes de usar cifras para decisiones.
 
+## Motor: workspaces, registro de ejecuciones y catálogo
+
+Las capas Bronze, Silver, Gold y los reportes se resuelven desde un único módulo (`src/engine/workspace.py`). Cada cliente o espacio de trabajo tiene su propio `workspace_id`.
+
+- **Workspace.** Por defecto es `default`, y usa exactamente las mismas rutas que antes (`data/lakehouse/<capa>/<tabla>`). Otro workspace vive en `<lakehouse>/workspaces/<id>/`, con sus tablas, su historial de runs y sus reportes (`output/workspaces/<id>/`). Se elige con `--workspace <id>` o con la variable `WORKSPACE_ID`. Los identificadores admiten minúsculas, dígitos, `-` y `_` (hasta 48 caracteres).
+- **Registro de ejecuciones.** Cada corrida de `run-pipeline` o `ingest-csv` queda registrada con su `run_id`, el proceso, el estado (`running`, `succeeded` o `failed`), las fechas y las métricas: filas de entrada y salida, filas en cuarentena, porcentaje de costos y de comisiones estimados, y el mensaje de error si falla. Se guarda como tabla Delta en `_ops/run_events`, con un evento por cambio de estado.
+- **Catálogo DuckDB.** `src/engine/catalog.py` registra las tablas Delta del workspace (`bronze_*`, `silver_*`, `quarantine_*` y los marts de Gold) y permite inspeccionar sus columnas, tipos, cantidad de filas y si tienen `custom_attributes`.
+
+Consultas desde la línea de comandos:
+
+```bash
+python -m src.main runs                                  # últimas ejecuciones (sintéticas)
+python -m src.main runs --lakehouse-dir data/lakehouse_csv   # ejecuciones de cargas CSV
+python -m src.main runs --lakehouse-dir data/lakehouse_csv --run-id <run_id>   # trazabilidad
+make runs                                                # equivalente al primer comando
+```
+
+Una ejecución que queda en `running` indica que el proceso se interrumpió: el registro no la marca como fallida por suposición.
+
+## Campos personalizados (`custom_attributes`)
+
+Además de las columnas canónicas, un mapeo puede declarar atributos extra de producto, venta o devolución. Se guardan como un objeto JSON en la columna `custom_attributes`, sin modificar ninguna columna canónica:
+
+```yaml
+sources:
+  products:
+    file: costos_stock.csv
+    columns: { sku: ["SKU"], unit_cost: ["Costo unitario"], list_price: ["Precio de lista"] }
+    custom_fields:
+      color: ["Color"]
+      material: ["Material", "Composición"]
+```
+
+- Los nombres de campo van en `snake_case` (2 a 40 caracteres) y no pueden repetir un campo canónico.
+- Las líneas de pedidos guardan sus atributos en `order_items.custom_attributes`. Productos y devoluciones usan su propia tabla.
+- Si una columna declarada no aparece en el archivo, el atributo queda vacío para todas las filas. No es un error.
+- Silver valida que el JSON sea válido. Un valor mal formado va a cuarentena con el motivo `invalid_custom_attributes`.
+- La privacidad aplica también a los campos extra. Un campo cuyo nombre sugiere dato personal (`email`, `telefono`, `dni`, `nombre`, `direccion`, etc.) se elimina por defecto antes de guardar. Si un nombre no personal contiene una de esas palabras, renómbrelo en el mapeo, o declárelo explícitamente con `sensitive:` para seudonimizarlo.
+
 ## Datos personales
 
 El tratamiento se aplica en el adaptador, antes de que cualquier valor llegue a Bronze. Los valores originales no se persisten en ninguna capa ni en los reportes.
@@ -223,6 +262,9 @@ medallion/gold.py                marts en DuckDB
 ingestion/mapping.py             mapeos YAML y resolución de alias de columnas
 ingestion/csv_adapter.py         exports CSV -> lote Bronze, con estimaciones marcadas
 ingestion/privacy.py             eliminación y seudonimización de datos personales
+engine/workspace.py              workspace (tenant) y resolución única de rutas
+engine/runs.py                   registro de ejecuciones (run_events en Delta)
+engine/catalog.py                catálogo DuckDB sobre las tablas Delta
 analyst/semantic.py              carga y validación de semantic_layer/metrics.yaml
 analyst/sql_guardrails.py        validador de solo lectura
 analyst/bi_agent.py              proveedores mock/bedrock, ejecución y lectura
@@ -243,11 +285,15 @@ Lo que está verificado en este repositorio:
 - Los números de Gold de un caso de prueba pequeño se comparan con valores calculados a mano (margen neto, reembolsos, comisiones).
 - Las métricas de Gold del pipeline completo se recalculan de forma independiente desde Silver.
 - Ejecución completa en almacenamiento S3 contra un servidor S3 simulado (`moto`). La segunda corrida no duplica Bronze (idempotencia).
+- Motor: el workspace por defecto conserva las rutas anteriores; un workspace distinto queda aislado; cada ejecución exitosa o fallida se registra con sus métricas; el catálogo expone los esquemas.
+- Campos personalizados: los valores extra llegan a Silver como JSON, las columnas canónicas no cambian, el JSON inválido va a cuarentena y un campo de nombre personal no sale del adaptador.
 - Ingesta CSV con datos ficticios: el margen con costos y comisiones exactos se calcula a mano y coincide; con costo estimado queda marcado como `estimated`; ningún dato personal de la muestra llega a Bronze, Silver, Gold ni al resumen; la segunda carga no duplica Bronze.
 
 Lo que no está verificado en este entorno:
 
 - MinIO real con `docker compose` (no hay Docker disponible aquí). La configuración sigue el mismo camino de `s3://` que se probó con `moto`.
+- El registro de ejecuciones y el catálogo no se probaron contra S3. El pipeline en S3 se verificó con `moto` en la primera versión, antes de este cambio.
+- Se observó, de forma intermitente en este entorno, que el intérprete no terminaba al salir después de leer tablas Delta con `to_pylist()`. La CLI termina con `os._exit` tras vaciar la salida (ver `src/main.py`). Es un workaround; no se verificó la causa en `deltalake`.
 - Llamadas reales a AWS Bedrock. El proveedor se prueba con un cliente simulado que respeta la API Converse.
 - Exports reales de Tiendanube, Mercado Libre o Shopify. Los mapeos de `mappings/` están escritos a partir de un formato genérico y ficticio, no de una exportación real validada.
 

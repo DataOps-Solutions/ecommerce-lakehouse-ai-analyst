@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import json
 import re
 import unicodedata
 from collections.abc import Sequence
@@ -38,6 +39,7 @@ from src.ingestion.mapping import (
     load_mapping,
     normalize_header,
     resolve_columns,
+    resolve_custom_columns,
 )
 from src.ingestion.privacy import FieldPrivacyStats, PrivacyPolicy
 from src.medallion.silver import METHOD_MAP
@@ -118,6 +120,12 @@ CANONICAL_COLUMNS: dict[str, tuple[str, ...]] = {
         "order_id",
     ),
 }
+# Entities whose records carry the JSON column of custom attributes. Lines of the orders file
+# hold their attributes on order_items; products and returns keep theirs on their own rows.
+for _entity in ("products", "order_items", "returns"):
+    CANONICAL_COLUMNS[_entity] = (*CANONICAL_COLUMNS[_entity], "custom_attributes")
+CUSTOM_ATTRIBUTES_COLUMN = "custom_attributes"
+
 ORDER_HEADER_FIELDS = (
     "order_date",
     "order_status",
@@ -278,6 +286,7 @@ class _State:
     warnings: list[str] = field(default_factory=list)
     files: list[FileReport] = field(default_factory=list)
     resolved: dict[str, dict[str, str]] = field(default_factory=dict)
+    custom_resolved: dict[str, dict[str, str]] = field(default_factory=dict)
     records: dict[str, list[dict[str, Any]]] = field(
         default_factory=lambda: {k: [] for k in CANONICAL_COLUMNS}
     )
@@ -328,6 +337,20 @@ class _Builder:
             return "", ""
         return _round_money(Decimal(list_price) * Decimal(str(self.s.cost_ratio))), "estimated"
 
+    def custom_json(self, source: str, row: dict[str, str]) -> str | None:
+        """JSON object of the custom attributes present in a row, or None when there are none.
+
+        Values are read after the privacy pass, so dropped values never reach the JSON.
+        """
+        attributes: dict[str, str] = {}
+        for name, header in self.st.custom_resolved.get(source, {}).items():
+            value = row.get(header, "").strip()
+            if value:
+                attributes[name] = value
+        if not attributes:
+            return None
+        return json.dumps(attributes, ensure_ascii=False, sort_keys=True)
+
     def products_file(self, rows: list[dict[str, str]]) -> None:
         for row in rows:
             sku = sku_key(self.text("products", row, "sku"))
@@ -349,6 +372,7 @@ class _Builder:
                     "unit_cost_source": source,
                     "list_price": list_price,
                     "stock_on_hand": self.quantity(self.text("products", row, "stock_on_hand")),
+                    CUSTOM_ATTRIBUTES_COLUMN: self.custom_json("products", row),
                 }
             )
 
@@ -452,6 +476,7 @@ class _Builder:
                     "quantity": qty,
                     "unit_price": price,
                     "discount_amount": line_disc,
+                    CUSTOM_ATTRIBUTES_COLUMN: self.custom_json("orders", row),
                 }
             )
             try:
@@ -537,6 +562,7 @@ class _Builder:
                     "quantity": self.quantity(self.text("returns", row, "quantity")),
                     "refund_amount": self.money(self.text("returns", row, "refund_amount")),
                     "reason": snake(self.text("returns", row, "reason")),
+                    CUSTOM_ATTRIBUTES_COLUMN: self.custom_json("returns", row),
                 }
             )
 
@@ -603,6 +629,7 @@ def ingest_files(
         {src: dict(spec.sensitive) for src, (_, spec) in specs.items()},
         {src: set(spec.columns) for src, (_, spec) in specs.items()},
         salt,
+        custom_by_source={src: set(spec.custom_fields) for src, (_, spec) in specs.items()},
     )
     settings = _Settings(
         decimal=mappings[0].format.decimal,
@@ -624,8 +651,11 @@ def ingest_files(
         path = input_dir / spec.file
         headers, rows = _read_rows(path, mapping)
         resolved = resolve_columns(headers, spec, source)
+        custom = resolve_custom_columns(headers, spec)
         state.resolved[source] = resolved
-        ignored = [h for h in headers if h not in set(resolved.values())]
+        state.custom_resolved[source] = custom
+        used = set(resolved.values()) | set(custom.values())
+        ignored = [h for h in headers if h not in used]
         state.files.append(
             FileReport(
                 source=source,
@@ -636,12 +666,13 @@ def ingest_files(
             )
         )
         state.warnings.extend(_sensitive_warnings(source, ignored))
-        _apply_privacy(policy, source, resolved, rows)
+        _apply_privacy(policy, source, {**resolved, **custom}, rows)
         hasher.update(path.read_bytes())
         rows_by_source[source] = rows
 
     for mapping in mappings:
-        hasher.update(mapping.model_dump_json().encode())
+        # exclude_defaults keeps batch ids of mappings without custom fields unchanged.
+        hasher.update(mapping.model_dump_json(exclude_defaults=True).encode())
     hasher.update((salt or "").encode())
     batch_id = f"csv-{hasher.hexdigest()[:16]}"
 

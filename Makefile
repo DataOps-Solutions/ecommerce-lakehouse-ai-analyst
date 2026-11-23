@@ -2,7 +2,7 @@ PYTHON ?= python3
 VENV ?= .venv
 BIN := $(VENV)/bin
 
-.PHONY: setup pipeline demo ingest-sample ui test lint clean
+.PHONY: setup pipeline demo ingest-sample runs ui test lint clean
 
 setup:
 	$(PYTHON) -m venv $(VENV)
@@ -25,6 +25,9 @@ ingest-sample:
 		--mapping mappings/generic_store_orders.yaml \
 		--mapping mappings/costs_and_stock.yaml \
 		--output-dir output/sample_csv
+
+runs:
+	$(BIN)/python -m src.main runs
 
 ui:
 	$(BIN)/streamlit run app/dashboard.py

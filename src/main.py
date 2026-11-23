@@ -11,9 +11,12 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import NoReturn
 
 import pyarrow as pa
 
@@ -21,6 +24,7 @@ from src.analyst.bi_agent import BiAnalyst, guardrail_showcase, provider_for
 from src.analyst.report import write_reports
 from src.analyst.semantic import SemanticLayer, load_semantic_layer
 from src.config import Settings, get_settings
+from src.engine.runs import RunTracker
 from src.ingestion.mapping import MappingError
 from src.models import AnalystResponse
 from src.pipeline import RunOutcome, load_gold_tables, run_csv_ingestion, run_pipeline
@@ -78,18 +82,63 @@ def _print_pipeline(outcome: RunOutcome) -> None:
         print(f"  {name}: {rows} filas")
 
 
-def _write_pipeline_report(settings: Settings, outcome: RunOutcome) -> Path:
-    out = settings.resolve_path(settings.output_dir) / "pipeline_report.json"
+def _write_pipeline_report(settings: Settings, outcome: RunOutcome, workspace_id: str) -> Path:
+    reports = settings.workspace(workspace_id).reports_dir(
+        settings.resolve_path(settings.output_dir)
+    )
+    out = reports / "pipeline_report.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(outcome.report.model_dump_json(indent=2), encoding="utf-8")
     return out
 
 
-def cmd_run_pipeline(settings: Settings, _args: argparse.Namespace) -> int:
-    outcome = run_pipeline(settings)
+def cmd_run_pipeline(settings: Settings, args: argparse.Namespace) -> int:
+    outcome = run_pipeline(settings, args.workspace)
     _print_pipeline(outcome)
-    print(f"Reporte de pipeline: {_write_pipeline_report(settings, outcome)}")
+    print(f"Reporte de pipeline: {_write_pipeline_report(settings, outcome, args.workspace)}")
+    print(f"Run registrado: {outcome.report.run_id} (workspace {args.workspace})")
     return 0
+
+
+def cmd_runs(settings: Settings, args: argparse.Namespace) -> int:
+    """Run history of a workspace: latest runs, or the full event trail of one run."""
+    if args.lakehouse_dir:
+        settings = settings.model_copy(update={"lakehouse_local_dir": Path(args.lakehouse_dir)})
+    tracker = RunTracker(settings.workspace(args.workspace), settings.storage_options())
+    if args.run_id:
+        events = tracker.history(args.run_id)
+        if not events:
+            print(f"No hay runs con id {args.run_id} en el workspace {args.workspace}.")
+            return 1
+        for event in events:
+            print(f"{event.event_at:%Y-%m-%d %H:%M:%S}  {event.status:<10} {event.pipeline_name}")
+            if event.error_message:
+                print(f"  error: {event.error_message}")
+        print(json.dumps(events[-1].model_dump(mode="json"), ensure_ascii=False, indent=2))
+        return 0
+    runs = tracker.list_runs(limit=args.limit)
+    if not runs:
+        print(f"Sin runs registrados en el workspace {args.workspace}.")
+        return 0
+    header = f"{'run_id':<14}{'pipeline':<20}{'estado':<11}{'inicio':<20}"
+    print(header + f"{'filas in':>10}{'filas out':>11}{'cuarent.':>10}{'costo est.%':>13}")
+    for run in runs:
+        m = run.metrics
+        print(
+            f"{run.run_id:<14}{run.pipeline_name:<20}{run.status:<11}"
+            f"{run.started_at:%Y-%m-%d %H:%M}   "
+            f"{_cell(m.rows_in):>10}{_cell(m.rows_out):>11}{_cell(m.quarantine_rows):>10}"
+            f"{_cell(m.estimated_cost_pct):>13}"
+        )
+    return 0
+
+
+def _cell(value: float | int | None) -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, float):
+        return f"{value:.2f}"
+    return f"{value:,}"
 
 
 def _print_response(response: AnalystResponse) -> None:
@@ -105,7 +154,7 @@ def _print_response(response: AnalystResponse) -> None:
 
 def cmd_ask(settings: Settings, args: argparse.Namespace) -> int:
     analyst, layer, provider_name = _build_analyst(
-        settings, load_gold_tables(settings), args.provider
+        settings, load_gold_tables(settings, args.workspace), args.provider
     )
     response = analyst.answer(args.question)
     _print_response(response)
@@ -127,9 +176,11 @@ def _run_demo_reports(
 
 
 def cmd_demo(settings: Settings, args: argparse.Namespace) -> int:
-    out_dir = settings.resolve_path(settings.output_dir)
+    out_dir = settings.workspace(args.workspace).reports_dir(
+        settings.resolve_path(settings.output_dir)
+    )
     md_path, json_path = _run_demo_reports(
-        settings, load_gold_tables(settings), args.provider, out_dir
+        settings, load_gold_tables(settings, args.workspace), args.provider, out_dir
     )
     print(f"\nReporte Markdown: {md_path}")
     print(f"Reporte JSON: {json_path}")
@@ -141,13 +192,15 @@ def cmd_ingest_csv(settings: Settings, args: argparse.Namespace) -> int:
     lakehouse_dir = settings.resolve_path(Path(args.lakehouse_dir))
     mappings = [settings.resolve_path(Path(p)) for p in args.mapping]
     try:
-        result = run_csv_ingestion(settings, input_dir, mappings, lakehouse_dir)
+        result = run_csv_ingestion(
+            settings, input_dir, mappings, lakehouse_dir, workspace_id=args.workspace
+        )
     except MappingError as exc:
         print(f"Error de configuración: {exc}", file=sys.stderr)
         return 2
     outcome = result.outcome
     _print_pipeline(outcome)
-    _write_pipeline_report(settings, outcome)
+    _write_pipeline_report(settings, outcome, args.workspace)
 
     out_dir = settings.resolve_path(Path(args.output_dir))
     summary = build_client_summary(
@@ -166,18 +219,39 @@ def cmd_ingest_csv(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def _add_workspace(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--workspace",
+        default=None,
+        help="Workspace (tenant). Por defecto, WORKSPACE_ID o 'default'.",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ecommerce-lakehouse", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run-pipeline", aliases=["pipeline"], help="Bronze -> Silver -> Gold")
+    _add_workspace(run)
     run.set_defaults(handler=cmd_run_pipeline)
     ask = sub.add_parser("ask", help="Responde una pregunta de negocio")
     ask.add_argument("question", help="Pregunta en español")
     ask.add_argument("--provider", choices=["mock", "bedrock"], default=None)
+    _add_workspace(ask)
     ask.set_defaults(handler=cmd_ask)
     demo = sub.add_parser("demo", help="Ejecuta las preguntas de demo y los guardrails")
     demo.add_argument("--provider", choices=["mock", "bedrock"], default=None)
+    _add_workspace(demo)
     demo.set_defaults(handler=cmd_demo)
+    runs = sub.add_parser("runs", help="Historial de ejecuciones registradas del workspace")
+    _add_workspace(runs)
+    runs.add_argument("--limit", type=int, default=20, help="Cantidad de runs a listar")
+    runs.add_argument("--run-id", default=None, help="Detalle y trazabilidad de un run")
+    runs.add_argument(
+        "--lakehouse-dir",
+        default=None,
+        help="Lakehouse a consultar, por ejemplo data/lakehouse_csv para cargas CSV.",
+    )
+    runs.set_defaults(handler=cmd_runs)
     csv_cmd = sub.add_parser(
         "ingest-csv", help="Carga exports reales (CSV) según mappings y genera el resumen"
     )
@@ -191,6 +265,7 @@ def build_parser() -> argparse.ArgumentParser:
     csv_cmd.add_argument("--lakehouse-dir", default=DEFAULT_CSV_LAKEHOUSE)
     csv_cmd.add_argument("--output-dir", default="output")
     csv_cmd.add_argument("--provider", choices=["mock", "bedrock"], default=None)
+    _add_workspace(csv_cmd)
     csv_cmd.set_defaults(handler=cmd_ingest_csv)
     return parser
 
@@ -200,12 +275,27 @@ def main(argv: list[str] | None = None) -> int:
     if getattr(args, "command", None) == "ingest-csv" and args.mapping is None:
         args.mapping = list(DEFAULT_MAPPINGS)
     settings = get_settings()
+    if getattr(args, "workspace", None) is None:
+        args.workspace = settings.workspace_id
     try:
         return int(args.handler(settings, args))
-    except RuntimeError as exc:
+    except (RuntimeError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
 
 
+def _exit_now(code: int) -> NoReturn:
+    """Exit without waiting for native deltalake worker threads to shut down.
+
+    Observed in the development environment: after a Delta table is read into Python objects,
+    the interpreter occasionally never finishes shutting down. Every file is closed before
+    this point, so skipping interpreter teardown loses no data. Remove this once the
+    upstream hang is confirmed fixed.
+    """
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    _exit_now(main())
