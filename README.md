@@ -284,6 +284,16 @@ Para cargar datos reales hace falta `PSEUDONYMIZATION_SALT` en el entorno. Sin �
 
 Un intento de carga que falla antes de terminar no devuelve su `run_id` en la respuesta de error. Se puede encontrar en `GET /workspaces/{id}/runs`.
 
+## Interfaz web (Next.js)
+
+La carpeta `web/` contiene la interfaz comercial: resumen, ingesta y mapeo, corridas, catálogo y analista BI, todos conectados a la API. Instrucciones completas en [`web/README.md`](web/README.md).
+
+```bash
+make api          # terminal 1: backend en http://127.0.0.1:8000
+make web-install  # una sola vez
+make web-dev      # terminal 2: interfaz en http://localhost:3000
+```
+
 ## Datos personales
 
 El tratamiento se aplica en el adaptador, antes de que cualquier valor llegue a Bronze. Los valores originales no se persisten en ninguna capa ni en los reportes.
@@ -318,6 +328,7 @@ ingestion/onboarding.py          detección de encabezados y mapeo sugerido para
 api/main.py                      aplicación FastAPI (rutas, CORS, ingesta por API)
 api/schemas.py                   modelos de request y response
 api/errors.py                    errores de dominio con códigos HTTP
+web/                             interfaz Next.js + TypeScript + Tailwind (ver web/README.md)
 analyst/semantic.py              carga y validación de semantic_layer/metrics.yaml
 analyst/sql_guardrails.py        validador de solo lectura
 analyst/bi_agent.py              proveedores mock/bedrock, ejecución y lectura

@@ -2,7 +2,7 @@ PYTHON ?= python3
 VENV ?= .venv
 BIN := $(VENV)/bin
 
-.PHONY: setup pipeline demo ingest-sample runs ui api test lint clean
+.PHONY: setup pipeline demo ingest-sample runs ui api test lint clean web-install web-dev web-build web-lint
 
 setup:
 	$(PYTHON) -m venv $(VENV)
@@ -34,6 +34,18 @@ ui:
 
 api:
 	$(BIN)/uvicorn src.api.main:app --host 127.0.0.1 --port 8000 --reload
+
+web-install:
+	cd web && npm install
+
+web-dev:
+	cd web && npm run dev -- -p 3000
+
+web-build:
+	cd web && npm run build
+
+web-lint:
+	cd web && npm run lint && ./node_modules/.bin/tsc --noEmit
 
 test:
 	$(BIN)/python -m pytest
