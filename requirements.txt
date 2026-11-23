@@ -14,3 +14,5 @@ mypy==2.4.1
 pandas-stubs==3.1.0.261029
 types-PyYAML==6.0.12.20261122
 types-boto3==1.44.9
+streamlit==1.67.0
+plotly==7.1.0

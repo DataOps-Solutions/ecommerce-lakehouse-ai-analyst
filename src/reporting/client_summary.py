@@ -9,6 +9,7 @@ was excluded and why.
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -224,6 +225,53 @@ def _quality_lines(quality: list[EntityQualityReport]) -> list[QualityLine]:
     return lines
 
 
+@dataclass(frozen=True)
+class EconTotals:
+    """Numeric totals of the active sales rows (orders with at least one sold order)."""
+
+    orders: int
+    units: int
+    sums: dict[str, Decimal]
+    cost_exact_share: float | None
+    fee_exact_share: float | None
+
+
+ECON_SUM_COLUMNS: tuple[str, ...] = (
+    "gross_sales",
+    "discounts_amount",
+    "refunds_amount",
+    "net_revenue",
+    "gateway_fees_amount",
+    "shipping_cost_amount",
+    "cogs_amount",
+    "net_margin_amount",
+)
+
+
+def active_econ_rows(gold: dict[str, pa.Table]) -> list[dict[str, Any]]:
+    """Rows of the unit-economics mart that have at least one order."""
+    return [r for r in _rows(gold["mart_daily_unit_economics"]) if r["orders_count"] > 0]
+
+
+def econ_totals(gold: dict[str, pa.Table]) -> EconTotals | None:
+    """Sum the unit-economics mart. Returns None when there are no valid sales."""
+    active = active_econ_rows(gold)
+    if not active:
+        return None
+    sums = {key: sum((_dec(r[key]) for r in active), Decimal(0)) for key in ECON_SUM_COLUMNS}
+    sold_lines = sum(r["sold_lines"] for r in active)
+    est_lines = sum(r["estimated_cost_lines"] for r in active)
+    fee_payments = sum(r["fee_payments"] for r in active)
+    est_fees = sum(r["estimated_fee_payments"] for r in active)
+    return EconTotals(
+        orders=sum(r["orders_count"] for r in active),
+        units=sum(r["units_sold"] for r in active),
+        sums=sums,
+        cost_exact_share=(sold_lines - est_lines) / sold_lines if sold_lines else None,
+        fee_exact_share=(fee_payments - est_fees) / fee_payments if fee_payments else None,
+    )
+
+
 def build_client_summary(
     gold: dict[str, pa.Table],
     silver: dict[str, pa.Table],
@@ -233,37 +281,21 @@ def build_client_summary(
     generated_at: str,
 ) -> ClientSummary:
     """Compute every figure and finding of the client summary."""
-    econ = _rows(gold["mart_daily_unit_economics"])
     sku_rows = _rows(gold["mart_sku_health"])
     funnel_rows = _rows(gold["mart_checkout_funnel"])
-    active = [r for r in econ if r["orders_count"] > 0]
+    active = active_econ_rows(gold)
+    totals_raw = econ_totals(gold)
 
     totals: SalesTotals | None = None
     by_channel: list[ChannelLine] = []
     cost_exact: float | None = None
     fee_exact: float | None = None
-    if active:
-        sums = {
-            key: sum((_dec(r[key]) for r in active), Decimal(0))
-            for key in (
-                "gross_sales",
-                "discounts_amount",
-                "refunds_amount",
-                "net_revenue",
-                "gateway_fees_amount",
-                "shipping_cost_amount",
-                "cogs_amount",
-                "net_margin_amount",
-            )
-        }
-        orders = sum(r["orders_count"] for r in active)
-        units = sum(r["units_sold"] for r in active)
-        sold_lines = sum(r["sold_lines"] for r in active)
-        est_lines = sum(r["estimated_cost_lines"] for r in active)
-        fee_payments = sum(r["fee_payments"] for r in active)
-        est_fees = sum(r["estimated_fee_payments"] for r in active)
-        cost_exact = (sold_lines - est_lines) / sold_lines if sold_lines else None
-        fee_exact = (fee_payments - est_fees) / fee_payments if fee_payments else None
+    if totals_raw is not None:
+        sums = totals_raw.sums
+        orders = totals_raw.orders
+        units = totals_raw.units
+        cost_exact = totals_raw.cost_exact_share
+        fee_exact = totals_raw.fee_exact_share
         net_rev = float(sums["net_revenue"])
         totals = SalesTotals(
             period_start=min(str(r["order_date"]) for r in active),
